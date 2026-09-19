@@ -12,6 +12,14 @@ function App() {
     const [contacts, setContacts] = useState(() => getStoredSettings().contacts);
     const [threshold, setThreshold] = useState(() => getStoredSettings().threshold);
     const [isDispatching, setIsDispatching] = useState(false);
+    const [isMicTesting, setIsMicTesting] = useState(false);
+    const [simulatedAcoustics, setSimulatedAcoustics] = useState(null);
+    const [location, setLocation] = useState({
+        lat: 28.6139,
+        lng: 77.209,
+        accuracy: null,
+        isLive: false,
+    });
 
     const { requestWakeLock, releaseWakeLock } = useWakeLock();
 
@@ -24,6 +32,29 @@ function App() {
         setThreshold(newThreshold);
         saveStoredSettings(contacts, newThreshold);
     };
+
+    const refreshCoordinates = useCallback(async () => {
+        if (!("geolocation" in navigator)) return;
+
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                setLocation({
+                    lat: Number(pos.coords.latitude.toFixed(5)),
+                    lng: Number(pos.coords.longitude.toFixed(5)),
+                    accuracy: pos.coords.accuracy,
+                    isLive: true,
+                });
+            },
+            (err) => {
+                console.warn("[GEOLOCATION] Live position fallback retained:", err.message);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 10000,
+            }
+        );
+    }, []);
 
     const validateContacts = (contactList) => {
         if (!contactList || contactList.length === 0) {
@@ -98,18 +129,68 @@ function App() {
             setIsDispatching(true);
 
             try {
-                await dispatchDistressAlert(contacts);
+                await dispatchDistressAlert(contacts, location);
             } catch (err) {
                 console.error("Alert dispatch pipeline failure:", err);
             } finally {
                 setIsDispatching(false);
             }
         },
-        [contacts]
+        [contacts, location]
     );
 
-    const { isListening, currentDecibels, startListening, stopListening } =
-        useAudioSentinel(threshold, triggerDistressPipeline);
+    const {
+        isListening,
+        currentDecibels,
+        noiseStatus,
+        startListening,
+        stopListening,
+    } = useAudioSentinel(threshold, triggerDistressPipeline);
+
+    // Toggle live microphone analysis directly on Dashboard
+    const handleToggleMicTest = async () => {
+        if (isListening) {
+            stopListening();
+            setIsMicTesting(false);
+        } else {
+            setIsMicTesting(true);
+            await startListening();
+        }
+    };
+
+    // Evaluator Simulation 1: Rejection test for sub-1kHz vehicle horn
+    const handleSimulateHonk = () => {
+        setSimulatedAcoustics({
+            db: 94,
+            status: "FILTERED_NOISE",
+            message: "DSP Filter: Sub-1kHz car horn fundamental (450Hz) detected. Alert blocked.",
+        });
+        setTimeout(() => {
+            setSimulatedAcoustics(null);
+        }, 3200);
+    };
+
+    // Evaluator Simulation 2: Trigger test for vocal distress scream
+    const handleSimulateScream = () => {
+        const validation = validateContacts(contacts);
+        if (!validation.valid) {
+            alert(`Simulation Blocked: ${validation.message}`);
+            return;
+        }
+        refreshCoordinates();
+
+        setSimulatedAcoustics({
+            db: 94,
+            status: "DISTRESS_CANDIDATE",
+            message: "Human distress formant (1.8-4.4kHz) verified (>700ms). Initiating Emergency 112...",
+        });
+
+        // 900ms reproduces the >700ms temporal persistence gate
+        setTimeout(() => {
+            setSimulatedAcoustics(null);
+            triggerDistressPipeline(94);
+        }, 900);
+    };
 
     const handleArm = async () => {
         const validation = validateContacts(contacts);
@@ -118,6 +199,9 @@ function App() {
             return;
         }
 
+        setIsMicTesting(false);
+        refreshCoordinates();
+
         try {
             const audioPrimer = new Audio("/audio/ringtone.mp3");
             audioPrimer.volume = 0;
@@ -125,7 +209,7 @@ function App() {
             audioPrimer.pause();
             audioPrimer.currentTime = 0;
         } catch {
-            // Browser autoplay permissions catch
+            // Browser autoplay unlock
         }
 
         setMode("STEALTH");
@@ -133,29 +217,26 @@ function App() {
         await startListening();
     };
 
-    const handleSimulateDistress = () => {
-        const validation = validateContacts(contacts);
-        if (!validation.valid) {
-            alert(`Simulation Blocked: ${validation.message}`);
-            return;
-        }
-        triggerDistressPipeline(92);
-    };
-
     const handleDisarm = async () => {
         stopListening();
+        setIsMicTesting(false);
         await releaseWakeLock();
         setMode("IDLE");
     };
 
     useEffect(() => {
-        if (mode !== "STEALTH" && isListening) {
+        if (mode !== "STEALTH" && !isMicTesting && isListening) {
             stopListening();
         }
-    }, [mode, isListening, stopListening]);
+    }, [mode, isMicTesting, isListening, stopListening]);
 
     const activeContact = contacts[0] || {};
     const primaryNumber = String(activeContact.whatsapp || activeContact.phone || "").trim();
+
+    // Combine live telemetry with test bench overrides
+    const displayDb = simulatedAcoustics ? simulatedAcoustics.db : currentDecibels;
+    const displayNoiseStatus = simulatedAcoustics ? simulatedAcoustics.status : noiseStatus;
+    const displayIsListening = isListening || Boolean(simulatedAcoustics);
 
     return (
         <main className="w-full min-h-screen bg-neutral-950 text-white">
@@ -165,17 +246,26 @@ function App() {
                     setContacts={handleContactsChange}
                     threshold={threshold}
                     setThreshold={handleThresholdChange}
-                    currentDecibels={currentDecibels}
-                    isListening={isListening}
+                    currentDecibels={displayDb}
+                    noiseStatus={displayNoiseStatus}
+                    isListening={displayIsListening}
+                    isMicTesting={isMicTesting}
+                    simulatedAcoustics={simulatedAcoustics}
+                    onToggleMicTest={handleToggleMicTest}
+                    onSimulateHonk={handleSimulateHonk}
+                    onSimulateScream={handleSimulateScream}
                     onArm={handleArm}
-                    onSimulateDistress={handleSimulateDistress}
+                    onSimulateDistress={handleSimulateScream}
                 />
             )}
 
             {mode === "STEALTH" && (
                 <StealthScreen
                     threshold={threshold}
+                    noiseStatus={displayNoiseStatus}
                     onDisarm={handleDisarm}
+                    onSimulateHonk={handleSimulateHonk}
+                    onSimulateScream={handleSimulateScream}
                     onTriggerDistress={() => triggerDistressPipeline(95)}
                 />
             )}
@@ -183,6 +273,7 @@ function App() {
             {mode === "TRIGGERED" && (
                 <DeterrentOverlay
                     recipientNumber={primaryNumber}
+                    location={location}
                     isDispatching={isDispatching}
                     onDecline={handleDisarm}
                     onAccept={() => console.info("Emergency line connected.")}

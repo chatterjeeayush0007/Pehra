@@ -12,32 +12,137 @@ import {
 
 export default function DeterrentOverlay({
     recipientNumber = "",
+    location = null,
     isDispatching = false,
     onDecline,
     onAccept,
 }) {
     const [callState, setCallState] = useState("RINGING");
     const [seconds, setSeconds] = useState(0);
+    const [activeCoords, setActiveCoords] = useState(() => {
+        if (location && location.isLive) {
+            return location;
+        }
+        return {
+            lat: location?.lat || 28.6139,
+            lng: location?.lng || 77.209,
+            accuracy: location?.accuracy || null,
+            isLive: location?.isLive || false,
+        };
+    });
+
     const audioRef = useRef(null);
+    const synthCleanupRef = useRef(null);
+
+    // Fallback dual-tone frequency generator (440Hz + 480Hz telecom standard)
+    const startSynthesizedRing = () => {
+        if (synthCleanupRef.current) return;
+
+        try {
+            const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioCtxClass();
+            let isActive = true;
+            let timerId = null;
+
+            const triggerBurst = () => {
+                if (!isActive || ctx.state === "closed") return;
+
+                const osc1 = ctx.createOscillator();
+                const osc2 = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc1.type = "sine";
+                osc1.frequency.setValueAtTime(440, ctx.currentTime);
+                osc2.type = "sine";
+                osc2.frequency.setValueAtTime(480, ctx.currentTime);
+
+                gain.gain.setValueAtTime(0.18, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.8);
+
+                osc1.connect(gain);
+                osc2.connect(gain);
+                gain.connect(ctx.destination);
+
+                osc1.start();
+                osc2.start();
+                osc1.stop(ctx.currentTime + 1.8);
+                osc2.stop(ctx.currentTime + 1.8);
+
+                timerId = setTimeout(triggerBurst, 3200);
+            };
+
+            triggerBurst();
+
+            synthCleanupRef.current = () => {
+                isActive = false;
+                if (timerId) clearTimeout(timerId);
+                if (ctx.state !== "closed") {
+                    ctx.close().catch(() => { });
+                }
+            };
+        } catch (err) {
+            console.warn("[AUDIO SYNTH] Fallback synthesizer unavailable:", err);
+        }
+    };
+
+    const stopAllAudio = () => {
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+        }
+        if (synthCleanupRef.current) {
+            synthCleanupRef.current();
+            synthCleanupRef.current = null;
+        }
+    };
+
+    // Attempt live GPS capture if coordinates are not yet resolved
+    useEffect(() => {
+        if (!activeCoords.isLive && "geolocation" in navigator) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    setActiveCoords({
+                        lat: Number(pos.coords.latitude.toFixed(5)),
+                        lng: Number(pos.coords.longitude.toFixed(5)),
+                        accuracy: pos.coords.accuracy,
+                        isLive: true,
+                    });
+                },
+                () => { },
+                { enableHighAccuracy: true, timeout: 4000 }
+            );
+        }
+    }, [activeCoords.isLive]);
 
     const cleanNumber = String(recipientNumber).replace(/\D/g, "").slice(-10);
-    const sampleLocation = "https://maps.google.com/?q=28.61390,77.20900";
+    const mapsUrl = `https://maps.google.com/?q=${activeCoords.lat},${activeCoords.lng}`;
     const whatsappPreviewUrl = cleanNumber
         ? `https://wa.me/91${cleanNumber}?text=${encodeURIComponent(
-            `🚨 PEHRA SENTINEL DISTRESS ALERT 🚨\nAutomated acoustic emergency threshold breached.\n📍 LIVE GPS: ${sampleLocation}\nPlease verify passenger transit safety immediately.`
+            `🚨 PEHRA SENTINEL DISTRESS ALERT 🚨\nAutomated acoustic emergency threshold breached.\n📍 LIVE GPS (${activeCoords.lat}, ${activeCoords.lng}):${mapsUrl}\nPlease verify passenger transit safety immediately.`
         )}`
         : null;
 
-    // Incoming ringtone audio playback
+    // Incoming ringtone playback with automatic synthesizer fallback
     useEffect(() => {
         const audio = new Audio("/audio/ringtone.mp3");
         audio.loop = true;
         audioRef.current = audio;
-        audio.play().catch((err) => console.warn("Autoplay blocked:", err));
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(() => {
+                // Fallback to synthesized audio if MP3 playback is rejected or asset is missing
+                startSynthesizedRing();
+            });
+        }
+
+        audio.onerror = () => {
+            // Direct asset 404 or decoding failure fallback
+            startSynthesizedRing();
+        };
 
         return () => {
-            audio.pause();
-            audio.currentTime = 0;
+            stopAllAudio();
         };
     }, []);
 
@@ -61,10 +166,10 @@ export default function DeterrentOverlay({
         };
     }, [callState]);
 
-    // Silence ringtone upon acceptance
+    // Silence all audio upon call acceptance
     useEffect(() => {
-        if (callState === "CONNECTED" && audioRef.current) {
-            audioRef.current.pause();
+        if (callState === "CONNECTED") {
+            stopAllAudio();
         }
     }, [callState]);
 
@@ -79,14 +184,14 @@ export default function DeterrentOverlay({
 
     const handleAccept = () => {
         if ("vibrate" in navigator) navigator.vibrate(0);
-        if (audioRef.current) audioRef.current.pause();
+        stopAllAudio();
         setCallState("CONNECTED");
         if (onAccept) onAccept();
     };
 
     const handleEnd = () => {
         if ("vibrate" in navigator) navigator.vibrate(0);
-        if (audioRef.current) audioRef.current.pause();
+        stopAllAudio();
         if (onDecline) onDecline();
     };
 
@@ -102,7 +207,7 @@ export default function DeterrentOverlay({
 
     return (
         <div className="fixed inset-0 z-50 bg-neutral-950 text-slate-100 flex items-center justify-center font-sans select-none overflow-hidden p-0 md:p-6">
-            {/* Desktop Simulator Simulation Notice (Outside Chassis) */}
+            {/* Desktop Simulator Aside */}
             <aside className="hidden md:flex flex-col gap-2.5 absolute top-8 left-8 max-w-xs z-20 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 backdrop-blur-md shadow-2xl">
                 <div className="flex items-center gap-2 text-amber-400">
                     <div className="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
@@ -122,10 +227,13 @@ export default function DeterrentOverlay({
                 </p>
                 <div className="pt-1 flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Simulated Gateway: Live Dispatch</span>
+                    <span>
+                        {activeCoords.isLive
+                            ? `Live GPS Locked: ${activeCoords.lat}, ${activeCoords.lng}`
+                            : "Simulated Gateway: Live Dispatch"}
+                    </span>
                 </div>
 
-                {/* Actionable WhatsApp verification link for evaluators */}
                 {whatsappPreviewUrl && (
                     <a
                         href={whatsappPreviewUrl}
@@ -174,8 +282,13 @@ export default function DeterrentOverlay({
                                             : "SMS + WHATSAPP BROADCAST CONFIRMED"}
                                     </p>
                                     <p className="text-[10px] text-slate-300 font-mono flex items-center gap-1 mt-0.5">
-                                        <MapPin className="w-3 h-3 text-rose-400" />
-                                        <span>GPS Routed: {displayTarget}</span>
+                                        <MapPin className="w-3 h-3 text-rose-400 shrink-0" />
+                                        <span className="truncate max-w-[210px]">
+                                            {activeCoords.isLive
+                                                ? `GPS (${activeCoords.lat}, ${activeCoords.lng})`
+                                                : "GPS Routed"}{" "}
+                                            → {displayTarget}
+                                        </span>
                                     </p>
                                 </div>
                             </div>
@@ -191,7 +304,7 @@ export default function DeterrentOverlay({
                     </div>
                 </div>
 
-                {/* Decoy 911 Call Screen */}
+                {/* Decoy 112 Call Screen */}
                 <div className="w-full flex-1 flex flex-col items-center justify-center text-center space-y-6 my-auto relative z-20">
                     <div className="relative">
                         <div className="w-28 h-28 rounded-full bg-rose-600/20 border border-rose-500/30 flex items-center justify-center animate-pulse">
@@ -203,15 +316,15 @@ export default function DeterrentOverlay({
                     </div>
                     <div className="space-y-1.5">
                         <span className="text-[11px] font-bold tracking-widest uppercase text-rose-400 bg-rose-500/10 border border-rose-500/20 px-3 py-1 rounded-full">
-                            EMERGENCY RESPONSE
+                            ERSS EMERGENCY RESPONSE
                         </span>
                         <h1 className="text-3xl font-black tracking-tight text-white pt-1">
-                            Emergency 911
+                            Emergency 112
                         </h1>
                         <p className="text-xs text-slate-400 font-medium">
                             {callState === "RINGING"
-                                ? "Incoming Emergency Call..."
-                                : "Connected"}
+                                ? "Incoming ERSS Police Dispatch..."
+                                : "Connected to Dispatcher"}
                         </p>
                         {callState === "CONNECTED" && (
                             <p className="text-xl font-mono font-bold text-emerald-400 pt-1 tracking-wider">

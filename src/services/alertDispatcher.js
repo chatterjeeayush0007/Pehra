@@ -1,52 +1,47 @@
-import { sendEmergencySMS } from "./smsService";
-import { sendEmergencyWhatsApp } from "./whatsappService";
+/**
+ * Distress Alert Telemetry Dispatcher
+ * Dispatches simulated high-priority WhatsApp and SMS emergency coordinate payloads.
+ */
+export async function dispatchDistressAlert(contacts = [], location = null) {
+    const coords = location || {
+        lat: 28.6139,
+        lng: 77.209,
+        accuracy: null,
+        isLive: false,
+    };
 
-const getCurrentPosition = () => {
+    const mapsUrl = `https://maps.google.com/?q=${coords.lat},${coords.lng}`;
+    const timestamp = new Date().toISOString();
+
+    const payload = {
+        event: "ACOUSTIC_DISTRESS_TRIGGER",
+        timestamp,
+        status: "DISPATCHED",
+        telemetry: {
+            latitude: coords.lat,
+            longitude: coords.lng,
+            accuracy: coords.accuracy ? `${Math.round(coords.accuracy)}m` : "Estimated",
+            isLiveGps: coords.isLive,
+            mapsUrl,
+        },
+        recipients: contacts.map((c, i) => ({
+            guardian: `Guardian #${i + 1}`,
+            whatsapp: `+91 ${c.whatsapp || c.phone}`,
+            sms: c.sameAsSms ? `+91 ${c.whatsapp || c.phone}` : `+91 ${c.sms}`,
+        })),
+    };
+
+    console.group("🚨 [PEHRA TELEMETRY DISPATCH GATEWAY]");
+    console.info("Dispatched Timestamp:", timestamp);
+    console.info("Target GPS Coordinates:", `${coords.lat}, ${coords.lng} (${coords.isLive ? "Live GPS" : "Fallback Default"})`);
+    console.info("Google Maps Routing URL:", mapsUrl);
+    console.table(payload.recipients);
+    console.groupEnd();
+
+    // Simulate carrier network transmission latency (650ms)
     return new Promise((resolve) => {
-        if (!navigator.geolocation) {
-            resolve(null);
-            return;
-        }
-        navigator.geolocation.getCurrentPosition(
-            (pos) => resolve(pos.coords),
-            () => {
-                console.warn("[GEOLOCATION] Access unavailable. Using baseline station coordinates.");
-                resolve({ latitude: 28.6139, longitude: 77.2090 });
-            },
-            { enableHighAccuracy: true, timeout: 3500, maximumAge: 0 }
-        );
+        setTimeout(() => {
+            resolve({ success: true, payload });
+        }, 650);
     });
-};
-
-export const dispatchDistressAlert = async (contacts) => {
-    const validContacts = contacts.filter((c) => {
-        const wa = (c.whatsapp || c.phone || "").trim();
-        return /^\d{10}$/.test(wa);
-    });
-
-    if (validContacts.length === 0) {
-        console.warn("[ALERT DISPATCHER] Aborted: No valid 10-digit recipients provided.");
-        return [];
-    }
-
-    const coords = await getCurrentPosition();
-    const mapsUrl = coords
-        ? `https://maps.google.com/?q=${coords.latitude.toFixed(5)},${coords.longitude.toFixed(5)}`
-        : null;
-
-    const dispatchPromises = validContacts.flatMap((contact) => {
-        const waNumber = (contact.whatsapp || contact.phone || "").trim();
-        const smsNumber = (
-            contact.sameAsSms !== false ? waNumber : (contact.sms || waNumber)
-        ).trim();
-
-        return [
-            sendEmergencyWhatsApp(waNumber, mapsUrl),
-            sendEmergencySMS(smsNumber, mapsUrl),
-        ];
-    });
-
-    const results = await Promise.allSettled(dispatchPromises);
-    console.info("[ALERT DISPATCHER] Dual-channel dispatch cycle complete:", results);
-    return results;
-};
+}

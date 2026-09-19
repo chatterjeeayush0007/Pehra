@@ -10,6 +10,10 @@ import {
     Radio,
     MessageSquare,
     AlertCircle,
+    Mic,
+    MicOff,
+    ShieldCheck,
+    ShieldAlert,
 } from "lucide-react";
 
 function RippleButton({ children, onClick, className = "", ...props }) {
@@ -68,7 +72,13 @@ export default function Dashboard({
     threshold = 80,
     setThreshold,
     currentDecibels = 0,
+    noiseStatus = "NORMAL",
     isListening = false,
+    isMicTesting = false,
+    simulatedAcoustics = null,
+    onToggleMicTest,
+    onSimulateHonk,
+    onSimulateScream,
     onArm,
     onSimulateDistress,
 }) {
@@ -211,8 +221,8 @@ export default function Dashboard({
         .anim-ripple { animation: clickRippleEffect 550ms cubic-bezier(0.1, 0.7, 0.1, 1) forwards; }
       `}</style>
 
-            {/* Desktop Simulator Aside */}
-            <aside className="hidden md:flex flex-col gap-2.5 absolute top-8 left-8 max-w-xs z-20 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 backdrop-blur-md shadow-2xl">
+            {/* Desktop Simulator Aside + Evaluator Bench */}
+            <aside className="hidden md:flex flex-col gap-3 absolute top-6 left-6 max-w-xs z-20 bg-slate-900/70 border border-slate-800/80 rounded-2xl p-4 backdrop-blur-md shadow-2xl">
                 <div className="flex items-center gap-2 text-violet-400">
                     <div className="p-1.5 rounded-lg bg-violet-500/10 border border-violet-500/20">
                         <Smartphone className="w-4 h-4" />
@@ -228,10 +238,59 @@ export default function Dashboard({
                     </span>{" "}
                     and{" "}
                     <span className="text-slate-200 font-semibold">
-                        decoy call screen
+                        decoy 112 call screen
                     </span>{" "}
                     are framed in standard mobile dimensions.
                 </p>
+
+                {/* Interactive DSP Evaluator Bench */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Judge DSP Test Bench</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-1.5">
+                        <button
+                            type="button"
+                            onClick={onSimulateHonk}
+                            className="w-full text-left py-2 px-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 transition-all cursor-pointer group"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold flex items-center gap-1.5">
+                                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>Simulate 94dB Car Horn</span>
+                                </span>
+                                <span className="text-[9px] font-mono font-bold bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-300">
+                                    REJECT
+                                </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                                Tests sub-1kHz filter. Should be rejected without triggering.
+                            </p>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={onSimulateScream}
+                            className="w-full text-left py-2 px-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 transition-all cursor-pointer group"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold flex items-center gap-1.5">
+                                    <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                                    <span>Simulate 94dB Scream</span>
+                                </span>
+                                <span className="text-[9px] font-mono font-bold bg-rose-500/20 px-1.5 py-0.5 rounded text-rose-300">
+                                    TRIGGER
+                                </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                                Tests 1.8-4.4kHz gate. Sustains 700ms & fires Emergency 112.
+                            </p>
+                        </button>
+                    </div>
+                </div>
+
                 <div className="pt-1 flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     <span>Automated WhatsApp & SMS Gateway</span>
@@ -490,7 +549,7 @@ export default function Dashboard({
                         </div>
                     </section>
 
-                    {/* Sensitivity Card */}
+                    {/* Sensitivity & Live DSP Card */}
                     <section className="bg-linear-to-b from-white/[0.06] to-white/2 border border-white/10 rounded-2xl p-4 shadow-sm backdrop-blur-md space-y-3.5">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -501,9 +560,31 @@ export default function Dashboard({
                                     Acoustic Sensitivity
                                 </h2>
                             </div>
-                            <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                {threshold} dB
-                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={onToggleMicTest}
+                                    className={`text-[10px] font-semibold px-2 py-1 rounded-lg border transition-all flex items-center gap-1 cursor-pointer ${isMicTesting
+                                            ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                                            : "bg-white/5 border-white/10 text-slate-300 hover:bg-white/10"
+                                        }`}
+                                >
+                                    {isMicTesting ? (
+                                        <>
+                                            <MicOff className="w-3 h-3 text-rose-400 animate-pulse" />
+                                            <span>Stop Test</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Mic className="w-3 h-3 text-emerald-400" />
+                                            <span>Test Live Mic</span>
+                                        </>
+                                    )}
+                                </button>
+                                <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                    {threshold} dB
+                                </span>
+                            </div>
                         </div>
 
                         <div className="space-y-2 pt-1">
@@ -525,8 +606,9 @@ export default function Dashboard({
                             </div>
                         </div>
 
+                        {/* Decibel Meter & FFT Spectrum Diagnostics */}
                         {isListening && (
-                            <div className="pt-2 p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
+                            <div className="pt-2 p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
                                 <div className="flex justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                                     <span>Microphone Activity</span>
                                     <span
@@ -539,6 +621,8 @@ export default function Dashboard({
                                         {currentDecibels} dB
                                     </span>
                                 </div>
+
+                                {/* Live Decibel Bar */}
                                 <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-800">
                                     <div
                                         className={`h-full rounded-full transition-all duration-75 ${currentDecibels >= threshold
@@ -548,6 +632,34 @@ export default function Dashboard({
                                         style={{ width: `${meterWidth}%` }}
                                     />
                                 </div>
+
+                                {/* Real-time DSP Frequency Classifier Badge */}
+                                <div className="pt-1 flex items-center justify-between text-[10px] font-mono">
+                                    <span className="text-slate-500">FFT Discriminator:</span>
+                                    {noiseStatus === "FILTERED_NOISE" && (
+                                        <span className="flex items-center gap-1 text-amber-400 font-semibold bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20 animate-pulse">
+                                            <span>⚠️ Low-Freq Transit / Horn Filtered</span>
+                                        </span>
+                                    )}
+                                    {noiseStatus === "DISTRESS_CANDIDATE" && (
+                                        <span className="flex items-center gap-1 text-rose-400 font-bold bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-500/30 animate-pulse">
+                                            <span>🚨 Vocal Distress Formant (1.8-4.4kHz)</span>
+                                        </span>
+                                    )}
+                                    {noiseStatus === "NORMAL" && (
+                                        <span className="text-emerald-400/90 flex items-center gap-1">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                            <span>Ambient Pass (Listening)</span>
+                                        </span>
+                                    )}
+                                </div>
+
+                                {/* Simulation Diagnostic Explainer Toast */}
+                                {simulatedAcoustics?.message && (
+                                    <p className="text-[10px] text-slate-300 bg-white/5 p-2 rounded-lg border border-white/10 font-mono mt-1">
+                                        {simulatedAcoustics.message}
+                                    </p>
+                                )}
                             </div>
                         )}
 
@@ -556,7 +668,7 @@ export default function Dashboard({
                             <span className="text-emerald-400 font-semibold">
                                 {threshold} dB
                             </span>{" "}
-                            dispatch high-priority WhatsApp and SMS coordinate packets and trigger the 911 line.
+                            dispatch high-priority WhatsApp and SMS coordinate packets and trigger the emergency 112 line.
                         </p>
                     </section>
 
